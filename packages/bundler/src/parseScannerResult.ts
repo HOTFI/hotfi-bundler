@@ -282,11 +282,10 @@ export function parseScannerResult (userOp: UserOperation, tracerResults: Bundle
         } else if (addr === entityAddr) {
           // accessing storage member of entity itself requires stake.
           requireStakeSlot = slot
-        } else {
-          // accessing arbitrary storage of another contract is not allowed
-          const readWrite = Object.keys(writes).includes(addr) ? 'write to' : 'read from'
+        } else if(Object.keys(writes).includes(addr)){
+          // writing arbitrary storage of another contract is not allowed
           requireCond(false,
-            `${entityTitle} has forbidden ${readWrite} ${nameAddr(addr, entityTitle)} slot ${slot}`,
+            `${entityTitle} has forbidden write to ${nameAddr(addr, entityTitle)} slot ${slot}`,
             ValidationErrors.OpcodeValidation, { [entityTitle]: entStakes?.addr })
         }
       })
