@@ -120,7 +120,7 @@ export class BundlerServer {
       }
       console.log('failed: ', method, 'error:', JSON.stringify(error))
       debug('<<', { jsonrpc, id, error })
-
+      console.log(err)
       res.send({
         jsonrpc,
         id,
@@ -151,6 +151,9 @@ export class BundlerServer {
         break
       case 'eth_getUserOperationByHash':
         result = await this.methodHandler.getUserOperationByHash(params[0])
+        break
+      case 'eth_getLastedGasPrice':
+        result = await this.methodHandler.getLastedGasPrice()
         break
       case 'web3_clientVersion':
         result = this.methodHandler.clientVersion()
