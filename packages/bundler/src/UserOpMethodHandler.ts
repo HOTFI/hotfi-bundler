@@ -1,8 +1,8 @@
-import { BigNumber, BigNumberish, Signer } from 'ethers'
+import { BigNumber, BigNumberish, Signer, ethers } from 'ethers'
 import { Log, Provider } from '@ethersproject/providers'
 
 import { BundlerConfig } from './BundlerConfig'
-import { resolveProperties } from 'ethers/lib/utils'
+import { resolveProperties, parseUnits } from 'ethers/lib/utils'
 import { deepHexlify, erc4337RuntimeVersion } from '@account-abstraction/utils'
 import { UserOperationStruct, EntryPoint } from '@account-abstraction/contracts'
 import { UserOperationEventEvent } from '@account-abstraction/contracts/dist/types/EntryPoint'
@@ -12,6 +12,7 @@ import { ExecutionManager } from './modules/ExecutionManager'
 import { getAddr } from './modules/moduleUtils'
 import { UserOperationByHashResponse, UserOperationReceipt } from './RpcTypes'
 import { ExecutionErrors, UserOperation, ValidationErrors } from './modules/Types'
+import { gasEstimator } from './modules/ArbGasProvider'
 
 const HEX_REGEX = /^0x[a-fA-F\d]*$/i
 
@@ -157,23 +158,31 @@ export class UserOpMethodHandler {
 
   async sendUserOperation(userOp1: UserOperationStruct, entryPointInput: string): Promise<string> {
     await this._validateParameters(userOp1, entryPointInput)
+    const userOp = await resolveProperties(userOp1)
+
+    const handleOpsABI =
+      '[{"inputs":[{"components":[{"internalType":"address","name":"sender","type":"address"},{"internalType":"uint256","name":"nonce","type":"uint256"},{"internalType":"bytes","name":"initCode","type":"bytes"},{"internalType":"bytes","name":"callData","type":"bytes"},{"internalType":"uint256","name":"callGasLimit","type":"uint256"},{"internalType":"uint256","name":"verificationGasLimit","type":"uint256"},{"internalType":"uint256","name":"preVerificationGas","type":"uint256"},{"internalType":"uint256","name":"maxFeePerGas","type":"uint256"},{"internalType":"uint256","name":"maxPriorityFeePerGas","type":"uint256"},{"internalType":"bytes","name":"paymasterAndData","type":"bytes"},{"internalType":"bytes","name":"signature","type":"bytes"}],"internalType":"struct UserOperation[]","name":"ops","type":"tuple[]"},{"internalType":"address payable","name":"beneficiary","type":"address"}],"name":"handleOps","outputs":[],"stateMutability":"nonpayable","type":"function"}]'
+    const handleOpsContract = new ethers.Contract(
+      entryPointInput,
+      handleOpsABI,
+      this.provider,
+    )
+
+    const handleOpsData = handleOpsContract.interface.encodeFunctionData('handleOps', [
+      [userOp],
+      entryPointInput,
+    ])
+
+    // const gasLimit = BigNumber.from(userOp1.callGasLimit).add(BigNumber.from(userOp1.verificationGasLimit)).add(BigNumber.from(userOp1.preVerificationGas))
 
     // check gas price
-    const feeData = await this.provider.getFeeData()
+    const minFee = await gasEstimator(handleOpsData, BigNumber.from(userOp1.callGasLimit), this.provider)
 
-    const userOp = await resolveProperties(userOp1)
-    
-    requireCond(feeData.maxFeePerGas != null && feeData.lastBaseFeePerGas != null , 'Fail to get gas data', -32602)
+    requireCond(minFee != null, 'Fail to get gas data', -32602)
 
-    if(feeData.maxFeePerGas != null && feeData.lastBaseFeePerGas != null){
-      const minFee = feeData.maxFeePerGas.sub(feeData.lastBaseFeePerGas)
+    requireCond(minFee.lte(userOp.maxFeePerGas), `MaxFeePerGas too low in UserOp, min:${minFee}`, -32602)
 
-      requireCond(minFee.lte(userOp.maxFeePerGas), `MaxFeePerGas too low in UserOp, min:${feeData.maxFeePerGas}`, -32602)
-
-      requireCond(minFee.lte(userOp.maxPriorityFeePerGas), `maxPriorityFeePerGas too low in UserOp, min:${feeData.maxPriorityFeePerGas}`, -32602)
-  
-    }
-
+    requireCond(minFee.lte(userOp.maxPriorityFeePerGas), `maxPriorityFeePerGas too low in UserOp, min:${minFee}`, -32602)
 
     console.log(`UserOperation: Sender=${userOp.sender}  Nonce=${tostr(userOp.nonce)} EntryPoint=${entryPointInput} Paymaster=${getAddr(
       userOp.paymasterAndData)}`)
@@ -278,8 +287,8 @@ export class UserOpMethodHandler {
   }
 
   async getLastedGasPrice(): Promise<BigNumber | null> {
-    const feeData = await this.provider.getFeeData()
-    return feeData.lastBaseFeePerGas
+    //gas price 0.1 gwei
+    return parseUnits('0.1', 9)
   }
 
   async getUserOperationReceipt(userOpHash: string): Promise<UserOperationReceipt | null> {
