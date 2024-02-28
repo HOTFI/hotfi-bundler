@@ -44,7 +44,7 @@ export interface EstimateUserOpGasResult {
 }
 
 export class UserOpMethodHandler {
-  constructor (
+  constructor(
     readonly execManager: ExecutionManager,
     readonly provider: Provider,
     readonly signer: Signer,
@@ -53,11 +53,11 @@ export class UserOpMethodHandler {
   ) {
   }
 
-  async getSupportedEntryPoints (): Promise<string[]> {
+  async getSupportedEntryPoints(): Promise<string[]> {
     return [this.config.entryPoint]
   }
 
-  async selectBeneficiary (): Promise<string> {
+  async selectBeneficiary(): Promise<string> {
     const currentBalance = await this.provider.getBalance(this.signer.getAddress())
     let beneficiary = this.config.beneficiary
     // below min-balance redeem to the signer, to keep it active.
@@ -68,9 +68,8 @@ export class UserOpMethodHandler {
     return beneficiary
   }
 
-  async _validateParameters (userOp1: UserOperationStruct, entryPointInput: string, requireSignature = true, requireGasParams = true): Promise<void> {
+  async _validateParameters(userOp1: UserOperationStruct, entryPointInput: string, requireSignature = true, requireGasParams = true): Promise<void> {
     requireCond(entryPointInput != null, 'No entryPoint param', -32602)
-
     if (entryPointInput?.toString().toLowerCase() !== this.config.entryPoint.toLowerCase()) {
       throw new Error(`The EntryPoint at "${entryPointInput}" is not supported. This bundler uses ${this.config.entryPoint}`)
     }
@@ -85,11 +84,13 @@ export class UserOpMethodHandler {
     if (requireGasParams) {
       fields.push('preVerificationGas', 'verificationGasLimit', 'callGasLimit', 'maxFeePerGas', 'maxPriorityFeePerGas')
     }
+    console.log(userOp)
     fields.forEach(key => {
       requireCond(userOp[key] != null, 'Missing userOp field: ' + key + JSON.stringify(userOp), -32602)
       const value: string = userOp[key].toString()
       requireCond(value.match(HEX_REGEX) != null, `Invalid hex value for property ${key}:${value} in UserOp`, -32602)
     })
+
   }
 
   /**
@@ -97,7 +98,7 @@ export class UserOpMethodHandler {
    * @param userOp1
    * @param entryPointInput
    */
-  async estimateUserOperationGas (userOp1: UserOperationStruct, entryPointInput: string): Promise<EstimateUserOpGasResult> {
+  async estimateUserOperationGas(userOp1: UserOperationStruct, entryPointInput: string): Promise<EstimateUserOpGasResult> {
     const userOp = {
       ...await resolveProperties(userOp1),
       // default values for missing fields.
@@ -154,10 +155,25 @@ export class UserOpMethodHandler {
     }
   }
 
-  async sendUserOperation (userOp1: UserOperationStruct, entryPointInput: string): Promise<string> {
+  async sendUserOperation(userOp1: UserOperationStruct, entryPointInput: string): Promise<string> {
     await this._validateParameters(userOp1, entryPointInput)
 
+    // check gas price
+    const feeData = await this.provider.getFeeData()
+
     const userOp = await resolveProperties(userOp1)
+    
+    requireCond(feeData.maxFeePerGas != null && feeData.lastBaseFeePerGas != null , 'Fail to get gas data', -32602)
+
+    if(feeData.maxFeePerGas != null && feeData.lastBaseFeePerGas != null){
+      const minFee = feeData.maxFeePerGas.sub(feeData.lastBaseFeePerGas)
+
+      requireCond(minFee.lte(userOp.maxFeePerGas), `MaxFeePerGas too low in UserOp, min:${feeData.maxFeePerGas}`, -32602)
+
+      requireCond(minFee.lte(userOp.maxPriorityFeePerGas), `maxPriorityFeePerGas too low in UserOp, min:${feeData.maxPriorityFeePerGas}`, -32602)
+  
+    }
+
 
     console.log(`UserOperation: Sender=${userOp.sender}  Nonce=${tostr(userOp.nonce)} EntryPoint=${entryPointInput} Paymaster=${getAddr(
       userOp.paymasterAndData)}`)
@@ -165,16 +181,16 @@ export class UserOpMethodHandler {
     return await this.entryPoint.getUserOpHash(userOp)
   }
 
-  async _getUserOperationEvent (userOpHash: string): Promise<UserOperationEventEvent> {
+  async _getUserOperationEvent(userOpHash: string): Promise<UserOperationEventEvent> {
     // TODO: eth_getLogs is throttled. must be acceptable for finding a UserOperation by hash
-    const event = await this.entryPoint.queryFilter(this.entryPoint.filters.UserOperationEvent(userOpHash))
+    const event = await this.entryPoint.queryFilter(this.entryPoint.filters.UserOperationEvent(userOpHash), await this.provider.getBlockNumber() - 2000)
     return event[0]
   }
 
   // filter full bundle logs, and leave only logs for the given userOpHash
   // @param userOpEvent - the event of our UserOp (known to exist in the logs)
   // @param logs - full bundle logs. after each group of logs there is a single UserOperationEvent with unique hash.
-  _filterLogs (userOpEvent: UserOperationEventEvent, logs: Log[]): Log[] {
+  _filterLogs(userOpEvent: UserOperationEventEvent, logs: Log[]): Log[] {
     let startIndex = -1
     let endIndex = -1
     const events = Object.values(this.entryPoint.interface.events)
@@ -203,7 +219,7 @@ export class UserOpMethodHandler {
     return logs.slice(startIndex + 1, endIndex)
   }
 
-  async getUserOperationByHash (userOpHash: string): Promise<UserOperationByHashResponse | null> {
+  async getUserOperationByHash(userOpHash: string): Promise<UserOperationByHashResponse | null> {
     requireCond(userOpHash?.toString()?.match(HEX_REGEX) != null, 'Missing/invalid userOpHash', -32601)
     const event = await this._getUserOperationEvent(userOpHash)
     if (event == null) {
@@ -261,9 +277,15 @@ export class UserOpMethodHandler {
     })
   }
 
-  async getUserOperationReceipt (userOpHash: string): Promise<UserOperationReceipt | null> {
+  async getLastedGasPrice(): Promise<BigNumber | null> {
+    const feeData = await this.provider.getFeeData()
+    return feeData.lastBaseFeePerGas
+  }
+
+  async getUserOperationReceipt(userOpHash: string): Promise<UserOperationReceipt | null> {
     requireCond(userOpHash?.toString()?.match(HEX_REGEX) != null, 'Missing/invalid userOpHash', -32601)
     const event = await this._getUserOperationEvent(userOpHash)
+    console.log(userOpHash)
     if (event == null) {
       return null
     }
@@ -281,7 +303,7 @@ export class UserOpMethodHandler {
     })
   }
 
-  clientVersion (): string {
+  clientVersion(): string {
     // eslint-disable-next-line
     return 'aa-bundler/' + erc4337RuntimeVersion + (this.config.unsafe ? '/unsafe' : '')
   }
