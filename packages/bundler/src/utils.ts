@@ -1,6 +1,9 @@
 import { JsonRpcProvider } from '@ethersproject/providers'
 import { BigNumberish } from 'ethers/lib/ethers'
 import { BigNumber, ethers } from 'ethers'
+import { debug_traceCall } from "./GethTracer"
+import { sign } from 'crypto'
+import { bundlerCollectorTracer } from "./BundlerCollectorTracer"
 
 export class RpcError extends Error {
   // error codes from: https://eips.ethereum.org/EIPS/eip-1474
@@ -54,16 +57,17 @@ export async function waitFor<T> (func: () => T | undefined, timeout = 10000, in
 }
 
 export async function supportsRpcMethod (provider: JsonRpcProvider, method: string): Promise<boolean> {
-  const signer = ethers.Wallet.createRandom()
-  const transaction = {
-    to: signer.address,
-    from: signer.address,
-    value: 0,
-    gasLimit: 1e6
-  }
-  const ret = await provider.send(method, [transaction, 'lasted', {}]).catch(e => e)
-  const code = ret.error?.code ?? ret.code
-  return code === -32602 // wrong params (meaning, method exists)
+  // const signer = ethers.Wallet.createRandom()
+  // const transaction = {
+  //   to: signer.address,
+  //   from: signer.address,
+  //   value: '0x00',
+  //   gasLimit: 1e6
+  // }
+  
+  // const ret = await debug_traceCall(provider, transaction, {tracer: bundlerCollectorTracer});
+  // const code = ret.error?.code ?? ret.code
+  return true // wrong params (meaning, method exists)
 }
 
 export async function isGeth (provider: JsonRpcProvider): Promise<boolean> {
